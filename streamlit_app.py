@@ -1,0 +1,377 @@
+"""
+Dashboard Streamlit para monitorización de temperaturas en tiempo real.
+Diseñado para ejecutarse en Raspberry Pi.
+"""
+
+import streamlit as st
+import polars as pl
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import time
+from datetime import datetime
+
+from data_acquisition import DataAcquisition
+
+# ============================================================
+# Configuración de la página
+# ============================================================
+st.set_page_config(
+    page_title="Monitor de Temperatura",
+    page_icon="🌡️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ============================================================
+# Inicialización del estado de sesión
+# ============================================================
+if "acquisition" not in st.session_state:
+    st.session_state.acquisition = None
+
+if "connected" not in st.session_state:
+    st.session_state.connected = False
+
+if "df" not in st.session_state:
+    st.session_state.df = pl.DataFrame()
+
+if "start_time" not in st.session_state:
+    st.session_state.start_time = None
+
+
+# ============================================================
+# Funciones auxiliares
+# ============================================================
+@st.cache_data(ttl=1)
+def get_device_colors():
+    """Colores para cada dispositivo."""
+    return {
+        "Dev 0": "#FF6B6B",
+        "Dev 1": "#4ECDC4",
+        "Dev 2": "#45B7D1",
+        "Dev 3": "#96CEB4",
+        "Dev 4": "#FFEAA7",
+    }
+
+
+def create_temperature_chart(df: pl.DataFrame, time_col: str = "segundos_desde_inicio") -> go.Figure:
+    """Crea gráfico de temperaturas vs tiempo."""
+    colors = get_device_colors()
+    fig = go.Figure()
+
+    device_cols = [col for col in df.columns if col.startswith("Dev")]
+
+    for col in device_cols:
+        fig.add_trace(go.Scatter(
+            x=df[time_col] if time_col in df.columns else df["Time"],
+            y=df[col],
+            mode="lines",
+            name=col,
+            line=dict(color=colors.get(col, "#888888"), width=2),
+            hovertemplate=f"{col}: %{{y:.2f}} °C<br>{time_col}: %{{x:.1f}}<extra></extra>",
+        ))
+
+    fig.update_layout(
+        title="Temperaturas en Tiempo Real",
+        xaxis_title="Tiempo (segundos desde inicio)" if time_col in df.columns else "Tiempo",
+        yaxis_title="Temperatura (°C)",
+        height=450,
+        hovermode="x unified",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+        ),
+        margin=dict(l=40, r=40, t=60, b=40),
+    )
+
+    return fig
+
+
+def create_temperature_gauge(temp: float, name: str, color: str) -> go.Figure:
+    """Crea un gauge (indicador circular) para mostrar temperatura actual."""
+    fig = go.Figure()
+
+    fig.add_trace(go.Indicator(
+        mode="gauge+number",
+        value=temp,
+        domain={"x": [0, 1], "y": [0, 1]},
+        gauge={
+            "axis": {"range": [15, 35], "tickwidth": 1},
+            "bar": {"color": color},
+            "borderwidth": 0,
+            "bordercolor": "#333",
+            "steps": [
+                {"range": [15, 20], "color": "#74b9ff"},
+                {"range": [20, 25], "color": "#55efc4"},
+                {"range": [25, 30], "color": "#fdcb6e"},
+                {"range": [30, 35], "color": "#e17055"},
+            ],
+        },
+        number={"suffix": " °C", "font": {"size": 20}},
+        title={"text": name, "font": {"size": 14}},
+    ))
+
+    fig.update_layout(
+        height=150,
+        margin=dict(l=20, r=20, t=30, b=20),
+    )
+
+    return fig
+
+
+def create_stats_panel(df: pl.DataFrame) -> dict:
+    """Calcula estadísticas para cada dispositivo."""
+    stats = {}
+    device_cols = [col for col in df.columns if col.startswith("Dev")]
+
+    for col in device_cols:
+        if col in df.columns:
+            temps = df[col].drop_nulls()
+            if len(temps) > 0:
+                stats[col] = {
+                    "actual": temps.tail(1)[0] if len(temps) > 0 else 0,
+                    "min": temps.min(),
+                    "max": temps.max(),
+                    "mean": temps.mean(),
+                    "std": temps.std() if len(temps) > 1 else 0,
+                }
+
+    return stats
+
+
+# ============================================================
+# Sidebar - Configuración
+# ============================================================
+with st.sidebar:
+    st.header("⚙️ Configuración")
+
+    # Selección de modo
+    mode = st.radio(
+        "Modo de operación",
+        ["📁 Simulación (CSV)", "🔌 Serial (Tiempo Real)"],
+        captions=[
+            "Carga datos desde archivo CSV",
+            "Conecta a dispositivo vía serial",
+        ],
+    )
+
+    if mode == "📁 Simulación (CSV)":
+        csv_file = st.text_input(
+            "Ruta al archivo CSV",
+            value="data/Medida_nueva.txt",
+            help="Ruta absoluta o relativa al archivo de datos",
+        )
+
+        if st.button("📂 Cargar Datos", type="primary", use_container_width=True):
+            try:
+                with st.spinner("Cargando datos..."):
+                    acq = DataAcquisition(csv_path=csv_file)
+                    df = acq.read_csv_file(csv_file)
+                    st.session_state.df = df
+                    st.session_state.start_time = datetime.now()
+                    st.success(f"✅ Cargados {len(df)} registros")
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
+
+    else:
+        # Configuración serial
+        port = st.text_input("Puerto Serial", value="/dev/ttyUSB0")
+        baudrate = st.selectbox("Baudrate", [9600, 19200, 38400, 115200], index=0)
+
+        if not st.session_state.connected:
+            if st.button("🔌 Conectar", type="primary", use_container_width=True):
+                try:
+                    acq = DataAcquisition(port=port, baudrate=baudrate)
+                    if acq.connect():
+                        st.session_state.acquisition = acq
+                        st.session_state.connected = True
+                        st.rerun()
+                    else:
+                        st.error("No se pudo conectar")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+        else:
+            st.success("🟢 Conectado")
+
+            if st.button("⏹️ Desconectar", use_container_width=True):
+                if st.session_state.acquisition:
+                    st.session_state.acquisition.disconnect()
+                st.session_state.connected = False
+                st.session_state.acquisition = None
+                st.rerun()
+
+    st.divider()
+
+    # Configuración de visualización
+    st.subheader("📊 Visualización")
+
+    refresh_rate = st.slider(
+        "Intervalo de actualización (s)",
+        min_value=1,
+        max_value=60,
+        value=5,
+    )
+
+    max_points = st.slider(
+        "Máximo de puntos a mostrar",
+        min_value=100,
+        max_value=5000,
+        value=1000,
+        step=100,
+    )
+
+    show_stats = st.checkbox("Mostrar estadísticas", value=True)
+
+    st.divider()
+
+    # Información del sistema
+    st.subheader("ℹ️ Sistema")
+    st.caption(f"Inicio: {st.session_state.start_time.strftime('%H:%M:%S') if st.session_state.start_time else 'N/A'}")
+
+    if st.session_state.connected and st.session_state.acquisition:
+        elapsed = (datetime.now() - st.session_state.start_time).total_seconds() if st.session_state.start_time else 0
+        st.caption(f"Tiempo de conexión: {elapsed:.0f}s")
+
+        if len(st.session_state.df) > 0:
+            st.caption(f"Total lecturas: {len(st.session_state.df)}")
+
+
+# ============================================================
+# Título principal
+# ============================================================
+col_title, col_status = st.columns([4, 1])
+
+with col_title:
+    st.title("🌡️ Monitor de Temperatura en Tiempo Real")
+
+with col_status:
+    if mode == "🔌 Serial (Tiempo Real)":
+        if st.session_state.connected:
+            st.success("EN LÍNEA")
+        else:
+            st.info("DESCONECTADO")
+
+
+# ============================================================
+# Adquisición de datos en tiempo real
+# ============================================================
+if mode == "🔌 Serial (Tiempo Real)" and st.session_state.connected:
+    if st.session_state.acquisition and st.session_state.acquisition._serial:
+        # Leer datos disponibles
+        acq = st.session_state.acquisition
+        serial = acq._serial
+
+        if serial.in_waiting > 0:
+            line = serial.readline().decode("utf-8", errors="ignore")
+            data = acq._parse_serial_line(line)
+
+            if data:
+                # Añadir timestamp
+                data["timestamp"] = datetime.now()
+
+                new_row = pl.DataFrame([data])
+                st.session_state.df = pl.concat([st.session_state.df, new_row])
+
+                # Limitar tamaño
+                if len(st.session_state.df) > max_points:
+                    st.session_state.df = st.session_state.df.tail(max_points)
+
+
+# ============================================================
+# Contenido principal
+# ============================================================
+if len(st.session_state.df) > 0:
+    df = st.session_state.df
+
+    # ============================================================
+    # Métricas y Gauges
+    # ============================================================
+    if show_stats:
+        stats = create_stats_panel(df)
+
+        cols = st.columns(5)
+        colors = get_device_colors()
+
+        for i, (col, col_stats) in enumerate(stats.items()):
+            with cols[i]:
+                st.plotly_chart(
+                    create_temperature_gauge(col_stats["actual"], col, colors[col]),
+                    use_container_width=True,
+                )
+
+        # Subtítulo con rango de datos
+        if "segundos_desde_inicio" in df.columns:
+            t_min = df["segundos_desde_inicio"].min()
+            t_max = df["segundos_desde_inicio"].max()
+            st.caption(f"⏱️ Rango temporal: {t_min:.0f}s - {t_max:.0f}s ({t_max - t_min:.0f}s de duración)")
+
+    # ============================================================
+    # Gráfico principal
+    # ============================================================
+    st.plotly_chart(
+        create_temperature_chart(df),
+        use_container_width=True,
+    )
+
+    # ============================================================
+    # Estadísticas detalladas
+    # ============================================================
+    with st.expander("📈 Estadísticas Detalladas"):
+        if show_stats:
+            stats = create_stats_panel(df)
+
+            stat_cols = st.columns(len(stats))
+            for i, (col, col_stats) in enumerate(stats.items()):
+                with stat_cols[i]:
+                    st.metric(col, f"{col_stats['actual']:.2f} °C")
+                    st.caption(f"Mín: {col_stats['min']:.2f} | Máx: {col_stats['max']:.2f}")
+                    st.caption(f"Media: {col_stats['mean']:.2f} | σ: {col_stats['std']:.2f}")
+
+    # ============================================================
+    # Tabla de datos recientes
+    # ============================================================
+    with st.expander("📋 Datos Recientes"):
+        display_cols = ["Time"] + [c for c in df.columns if c.startswith("Dev")]
+        available_cols = [c for c in display_cols if c in df.columns]
+
+        if available_cols:
+            st.dataframe(
+                df.select(available_cols).tail(20),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            csv_data = df.select(available_cols).write_csv()
+            st.download_button(
+                "⬇️ Descargar CSV",
+                csv_data,
+                file_name=f"temperaturas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+            )
+
+else:
+    # Estado vacío
+    st.info("👈 Configure la conexión y cargue datos para comenzar")
+    st.markdown(
+        """
+        ### Instrucciones:
+        1. **Modo Simulación**: Ingrese la ruta a un archivo CSV con formato `Time;Dev 0;Dev 1;...`
+        2. **Modo Serial**: Conecte el dispositivo y configure el puerto (ej. `/dev/ttyUSB0`)
+
+        El formato esperado del archivo CSV es:
+        ```
+        Time;Dev 0;Dev 1;Dev 2;Dev 3;Dev 4
+        16:59:25;22.062;22.375;23.312;22.187;22.125
+        ```
+        """
+    )
+
+
+# ============================================================
+# Auto-actualización
+# ============================================================
+if mode == "🔌 Serial (Tiempo Real)" and st.session_state.connected:
+    time.sleep(refresh_rate)
+    st.rerun()
