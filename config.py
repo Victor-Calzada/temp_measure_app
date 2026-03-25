@@ -10,11 +10,10 @@ DEVICE_COLS = [f"Dev {i}" for i in range(5)]  # Nombres de dispositivos
 TIME_COL = "Time"  # Nombre de columna de tiempo
 
 # ============================================================
-# CONFIGURACIÓN SERIAL
+# CONFIGURACIÓN DE SENSORES HARDWARE
 # ============================================================
-SERIAL_PORT = "/dev/ttyUSB0"  # Puerto serial por defecto en Linux
-# SERIAL_PORT = "COM3"        # Puerto serial en Windows
-BAUDRATE = 9600
+W1_DEVICES_DIR = "/sys/bus/w1/devices/"
+CPU_TEMP_FILE = "/sys/class/thermal/thermal_zone0/temp"
 
 # ============================================================
 # CONFIGURACIÓN DE VISUALIZACIÓN

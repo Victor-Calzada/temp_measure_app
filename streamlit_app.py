@@ -150,10 +150,10 @@ with st.sidebar:
     # Selección de modo
     mode = st.radio(
         "Modo de operación",
-        ["📁 Simulación (CSV)", "🔌 Serial (Tiempo Real)"],
+        ["📁 Simulación (CSV)", "📡 Sensores Internos (Tiempo Real)"],
         captions=[
             "Carga datos desde archivo CSV",
-            "Conecta a dispositivo vía serial",
+            "Lee hardware local en Raspberry Pi",
         ],
     )
 
@@ -176,26 +176,22 @@ with st.sidebar:
                 st.error(f"❌ Error: {e}")
 
     else:
-        # Configuración serial
-        port = st.text_input("Puerto Serial", value="/dev/ttyUSB0")
-        baudrate = st.selectbox("Baudrate", [9600, 19200, 38400, 115200], index=0)
-
+        # Configuración local
         if not st.session_state.connected:
-            if st.button("🔌 Conectar", type="primary", use_container_width=True):
+            if st.button("▶️ Iniciar Lectura", type="primary", use_container_width=True):
                 try:
-                    acq = DataAcquisition(port=port, baudrate=baudrate)
-                    if acq.connect():
-                        st.session_state.acquisition = acq
-                        st.session_state.connected = True
-                        st.rerun()
-                    else:
-                        st.error("No se pudo conectar")
+                    acq = DataAcquisition()
+                    acq.connect()
+                    acq.start_streaming()
+                    st.session_state.acquisition = acq
+                    st.session_state.connected = True
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
         else:
-            st.success("🟢 Conectado")
+            st.success("🟢 Leyendo Sensores")
 
-            if st.button("⏹️ Desconectar", use_container_width=True):
+            if st.button("⏹️ Detener Lectura", use_container_width=True):
                 if st.session_state.acquisition:
                     st.session_state.acquisition.disconnect()
                 st.session_state.connected = False
@@ -247,36 +243,23 @@ with col_title:
     st.title("🌡️ Monitor de Temperatura en Tiempo Real")
 
 with col_status:
-    if mode == "🔌 Serial (Tiempo Real)":
+    if mode == "📡 Sensores Internos (Tiempo Real)":
         if st.session_state.connected:
-            st.success("EN LÍNEA")
+            st.success("LEYENDO")
         else:
-            st.info("DESCONECTADO")
+            st.info("DETENIDO")
 
 
 # ============================================================
 # Adquisición de datos en tiempo real
 # ============================================================
-if mode == "🔌 Serial (Tiempo Real)" and st.session_state.connected:
-    if st.session_state.acquisition and st.session_state.acquisition._serial:
-        # Leer datos disponibles
+if mode == "📡 Sensores Internos (Tiempo Real)" and st.session_state.connected:
+    if st.session_state.acquisition:
+        # Recuperar el dataframe acumulado en el thread secundario
         acq = st.session_state.acquisition
-        serial = acq._serial
-
-        if serial.in_waiting > 0:
-            line = serial.readline().decode("utf-8", errors="ignore")
-            data = acq._parse_serial_line(line)
-
-            if data:
-                # Añadir timestamp
-                data["timestamp"] = datetime.now()
-
-                new_row = pl.DataFrame([data])
-                st.session_state.df = pl.concat([st.session_state.df, new_row])
-
-                # Limitar tamaño
-                if len(st.session_state.df) > max_points:
-                    st.session_state.df = st.session_state.df.tail(max_points)
+        current_data = acq.dataframe
+        if current_data is not None and not current_data.is_empty():
+            st.session_state.df = current_data.tail(max_points)
 
 
 # ============================================================
@@ -358,7 +341,7 @@ else:
         """
         ### Instrucciones:
         1. **Modo Simulación**: Ingrese la ruta a un archivo CSV con formato `Time;Dev 0;Dev 1;...`
-        2. **Modo Serial**: Conecte el dispositivo y configure el puerto (ej. `/dev/ttyUSB0`)
+        2. **Modo Sensores Internos**: Lea directamente el hardware local 1-Wire.
 
         El formato esperado del archivo CSV es:
         ```
@@ -372,6 +355,6 @@ else:
 # ============================================================
 # Auto-actualización
 # ============================================================
-if mode == "🔌 Serial (Tiempo Real)" and st.session_state.connected:
+if mode == "📡 Sensores Internos (Tiempo Real)" and st.session_state.connected:
     time.sleep(refresh_rate)
     st.rerun()

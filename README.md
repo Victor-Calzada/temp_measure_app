@@ -45,40 +45,6 @@ Time;Dev 0;Dev 1;Dev 2;Dev 3;Dev 4
 17:00:10;22.062;22.375;23.375;22.125;22.062
 ```
 
-### Puerto Serial
-Enviar datos en formato: `DEV0;DEV1;DEV2;DEV3;DEV4;TIME`
-Ejemplo: `22.062;22.375;23.312;22.187;22.125;16:59:25`
-
-## Configuración Serial (Arduino)
-
-Ejemplo básico para Arduino:
-```cpp
-void setup() {
-  Serial.begin(9600);
-}
-
-void loop() {
-  float dev0 = leerSensor(0);
-  float dev1 = leerSensor(1);
-  float dev2 = leerSensor(2);
-  float dev3 = leerSensor(3);
-  float dev4 = leerSensor(4);
-
-  Serial.print(dev0);
-  Serial.print(";");
-  Serial.print(dev1);
-  Serial.print(";");
-  Serial.print(dev2);
-  Serial.print(";");
-  Serial.print(dev3);
-  Serial.print(";");
-  Serial.print(dev4);
-  Serial.println();
-
-  delay(5000);
-}
-```
-
 ## Configuración de Sensores 1-Wire (DS18B20) en Raspberry Pi
 
 Para utilizar sensores de temperatura DS18B20 directamente en los pines GPIO de la Raspberry Pi, sigue estos pasos:
@@ -116,7 +82,7 @@ cat /sys/bus/w1/devices/28-00000xxxxxxx/w1_slave
 ```
 
 ### 4. Integración con el Dashboard
-Actualmente, el dashboard lee datos de **Serial** o **CSV**. Para usar sensores 1-wire, se recomienda un script intermedio que lea los sensores y escriba los resultados en un archivo CSV compatible.
+Actualmente, el dashboard lee datos localmente a través de Python. Al iniciar la lectura, se examinará `/sys/bus/w1/devices/` para obtener los datos de los sensores conectados. No se necesita hardware externo adicional intermedio como un Arduino.
 
 ## Modo демо (sin hardware)
 
