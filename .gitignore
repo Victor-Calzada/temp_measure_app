@@ -1,0 +1,11 @@
+
+#ignora solo el contenido de data, no la carpeta
+
+!data/
+data/*
+
+
+__pycache__
+
+
+GEMINI.md
