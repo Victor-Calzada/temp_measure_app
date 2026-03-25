@@ -79,6 +79,45 @@ void loop() {
 }
 ```
 
+## Configuración de Sensores 1-Wire (DS18B20) en Raspberry Pi
+
+Para utilizar sensores de temperatura DS18B20 directamente en los pines GPIO de la Raspberry Pi, sigue estos pasos:
+
+### 1. Conexión Física
+- **VCC**: Pin 1 (3.3V)
+- **GND**: Pin 6 (GND)
+- **Data**: Pin 7 (GPIO4)
+- **Resistencia**: Es necesario colocar una resistencia de **4.7kΩ** entre VCC y Data (Pull-up).
+
+### 2. Habilitar Interfaz 1-Wire
+Edita el archivo de configuración de arranque:
+```bash
+sudo nano /boot/config.txt
+```
+Añade la siguiente línea al final del archivo:
+```text
+dtoverlay=w1-gpio
+```
+*Nota: En versiones muy recientes de Raspberry Pi OS, el archivo puede estar en `/boot/firmware/config.txt`.*
+
+Reinicia la Raspberry Pi:
+```bash
+sudo reboot
+```
+
+### 3. Verificar Sensores
+Una vez reiniciado, los sensores deberían aparecer como directorios en el sistema de archivos:
+```bash
+ls /sys/bus/w1/devices/
+```
+Cada sensor tendrá un ID único (ej. `28-00000xxxxxxx`). Puedes leer la temperatura actual con:
+```bash
+cat /sys/bus/w1/devices/28-00000xxxxxxx/w1_slave
+```
+
+### 4. Integración con el Dashboard
+Actualmente, el dashboard lee datos de **Serial** o **CSV**. Para usar sensores 1-wire, se recomienda un script intermedio que lea los sensores y escriba los resultados en un archivo CSV compatible.
+
 ## Modo демо (sin hardware)
 
 Selecciona "Simulación (CSV)" en el panel lateral y especifica la ruta al archivo CSV.
