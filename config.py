@@ -35,6 +35,8 @@ TEMP_WARNING_HIGH = 30.0  # Umbral alto
 # ============================================================
 DATA_DIR = "data"
 DEFAULT_CSV = "data/Medida_nueva.txt"
+USB_PATH = "/media/ladicim/3A1D-0E89"
+FALLBACK_PATH = "~/Downloads"
 
 # ============================================================
 # COLORES (Dispositivos)
