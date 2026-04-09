@@ -37,7 +37,12 @@ class DataAcquisition:
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
-        self._df = pl.DataFrame()
+        # Definir el esquema explícito para evitar errores de tipo con Polars (Null vs String/Float)
+        self._schema = {self.time_col: pl.String}
+        for col in self.device_cols:
+            self._schema[col] = pl.Float64
+
+        self._df = pl.DataFrame(schema=self._schema)
         self._on_data_callback: Optional[Callable[[pl.DataFrame], None]] = None
 
     def connect(self) -> bool:
@@ -129,15 +134,13 @@ class DataAcquisition:
 
     def _read_sensors_loop(self):
         """Bucle de lectura de sensores hardware (se ejecuta en thread separado)."""
-        self._df = pl.DataFrame(
-            {self.time_col: [], **{col: [] for col in self.device_cols}}
-        )
+        self._df = pl.DataFrame(schema=self._schema)
 
         while self._running:
             data = self._read_hardware_sensors()
 
             if data:
-                new_row = pl.DataFrame([data])
+                new_row = pl.DataFrame([data], schema=self._schema)
                 self._df = pl.concat([self._df, new_row])
 
                 # Limitar a 10000 filas para no agotar memoria
@@ -201,4 +204,4 @@ class DataAcquisition:
 
     def clear_data(self):
         """Limpia los datos acumulados."""
-        self._df = pl.DataFrame()
+        self._df = pl.DataFrame(schema=self._schema)
