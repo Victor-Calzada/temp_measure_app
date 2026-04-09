@@ -143,9 +143,9 @@ class DataAcquisition:
                 new_row = pl.DataFrame([data], schema=self._schema)
                 self._df = pl.concat([self._df, new_row])
 
-                # Limitar a 10000 filas para no agotar memoria
-                if len(self._df) > 10000:
-                    self._df = self._df.tail(10000)
+                # Limitar a 25 millones de filas (~2GB) para no agotar memoria
+                if len(self._df) > 25_000_000:
+                    self._df = self._df.tail(25_000_000)
 
                 if self._on_data_callback:
                     self._on_data_callback(self._df)
