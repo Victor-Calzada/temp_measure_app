@@ -287,7 +287,7 @@ with st.sidebar:
     st.subheader("ℹ️ Sistema")
     st.caption(f"Inicio: {st.session_state.start_time.strftime('%H:%M:%S') if st.session_state.start_time else 'N/A'}")
 
-    if st.session_state.connected and st.session_state.acquisition:
+    if st.session_state.connected:
         elapsed = (datetime.now() - st.session_state.start_time).total_seconds() if st.session_state.start_time else 0
         st.caption(f"Tiempo de conexión: {elapsed:.0f}s")
 
