@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timedelta
 import os
 from pathlib import Path
-from config import USB_PATH, FALLBACK_PATH
+from config import USB_PATH, FALLBACK_PATH, DATA_DIR
 
 from data_acquisition import DataAcquisition
 
@@ -26,19 +26,32 @@ st.set_page_config(
 )
 
 # ============================================================
-# Inicialización del estado de sesión
+# Inicialización del estado de sesión y Recursos
 # ============================================================
-if "acquisition" not in st.session_state:
-    st.session_state.acquisition = None
+LOG_FILE = os.path.join(DATA_DIR, "active_measurement.csv")
+
+@st.cache_resource
+def get_acquisition_engine(log_path=None):
+    """Retorna el motor de adquisición persistente entre sesiones."""
+    return DataAcquisition(log_path=log_path)
 
 if "connected" not in st.session_state:
-    st.session_state.connected = False
+    # Si existe el archivo de log activo, es posible que vengamos de una desconexión
+    st.session_state.connected = os.path.exists(LOG_FILE)
 
 if "df" not in st.session_state:
     st.session_state.df = pl.DataFrame()
 
 if "start_time" not in st.session_state:
-    st.session_state.start_time = None
+    # Intentar recuperar start_time desde el log si existe
+    if os.path.exists(LOG_FILE):
+        try:
+            mtime = os.path.getctime(LOG_FILE)
+            st.session_state.start_time = datetime.fromtimestamp(mtime)
+        except:
+            st.session_state.start_time = None
+    else:
+        st.session_state.start_time = None
 
 if "timer_active" not in st.session_state:
     st.session_state.timer_active = False
@@ -210,22 +223,40 @@ with st.sidebar:
         if not st.session_state.connected:
             if st.button("▶️ Iniciar Lectura", type="primary", use_container_width=True):
                 try:
-                    acq = DataAcquisition()
+                    # Siempre usamos el LOG_FILE para asegurar persistencia
+                    acq = get_acquisition_engine(log_path=LOG_FILE)
                     acq.connect()
                     acq.start_streaming()
-                    st.session_state.acquisition = acq
                     st.session_state.connected = True
+                    st.session_state.start_time = datetime.now()
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
         else:
             st.success("🟢 Leyendo Sensores")
+            
+            # Recuperar el motor si ya estaba conectado
+            acq = get_acquisition_engine(log_path=LOG_FILE)
+            if not acq._running:
+                acq.connect()
+                acq.start_streaming()
 
             if st.button("⏹️ Detener Lectura", use_container_width=True):
-                if st.session_state.acquisition:
-                    st.session_state.acquisition.disconnect()
+                acq.disconnect()
                 st.session_state.connected = False
-                st.session_state.acquisition = None
+                
+                # Al detener manualmente, si el archivo de log existe, lo movemos a histórico o lo borramos
+                if os.path.exists(LOG_FILE):
+                    try:
+                        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        final_path = os.path.join(DATA_DIR, f"manual_stop_{timestamp}.csv")
+                        os.rename(LOG_FILE, final_path)
+                        st.info(f"💾 Datos guardados en {final_path}")
+                    except:
+                        os.remove(LOG_FILE)
+                
+                # Forzar recreación del motor la próxima vez
+                st.cache_resource.clear()
                 st.rerun()
 
     st.divider()
@@ -283,25 +314,41 @@ with col_status:
 # Adquisición de datos en tiempo real y Lógica del Temporizador
 # ============================================================
 if mode == "📡 Sensores Internos (Tiempo Real)" and st.session_state.connected:
-    if st.session_state.acquisition:
-        # Recuperar el dataframe acumulado en el thread secundario
-        acq = st.session_state.acquisition
-        current_data = acq.dataframe
-        if current_data is not None and not current_data.is_empty():
-            st.session_state.df = current_data.tail(max_points)
+    # Recuperar el motor de adquisición persistente
+    acq = get_acquisition_engine(log_path=LOG_FILE)
+    
+    # Sincronizar estado del temporizador con session_state para la UI
+    st.session_state.timer_active = acq.timer_active
+    st.session_state.timer_end_time = acq.timer_end_time
+    
+    # Recuperar el dataframe acumulado
+    current_data = acq.dataframe
+    if current_data is not None and not current_data.is_empty():
+        # Procesar tiempos para visualización
+        processed_data = acq._calculate_seconds_from_start(current_data)
+        st.session_state.df = processed_data.tail(max_points)
 
     # Verificación del Temporizador
-    if st.session_state.timer_active and st.session_state.timer_end_time:
-        if datetime.now() >= st.session_state.timer_end_time:
+    if acq.timer_active and acq.timer_end_time:
+        if datetime.now() >= acq.timer_end_time:
             # Exportar datos completos antes de detener
-            full_df = st.session_state.acquisition.dataframe
+            full_df = acq.dataframe
             if full_df is not None and not full_df.is_empty():
-                st.session_state.last_export_path = handle_auto_export(full_df)
+                # Procesar tiempos para el export final
+                full_df_processed = acq._calculate_seconds_from_start(full_df)
+                st.session_state.last_export_path = handle_auto_export(full_df_processed)
 
             # Detener lectura
-            st.session_state.acquisition.disconnect()
+            acq.disconnect()
             st.session_state.connected = False
+            acq.timer_active = False
             st.session_state.timer_active = False
+            
+            # Limpiar log activo ya que se ha exportado con éxito
+            if os.path.exists(LOG_FILE):
+                os.remove(LOG_FILE)
+            
+            st.cache_resource.clear()
             st.rerun()
 
 # ============================================================
@@ -413,12 +460,22 @@ with tab_timer:
 
         start_btn_disabled = not st.session_state.connected
         if st.button("🚀 Iniciar Temporizador", type="primary", use_container_width=True, disabled=start_btn_disabled):
+            # Obtener el motor de adquisición persistente
+            acq = get_acquisition_engine(log_path=LOG_FILE)
+            acq.timer_active = True
+            acq.timer_end_time = datetime.now() + timedelta(hours=duration)
+            
+            # Sincronizar session_state para actualización inmediata
             st.session_state.timer_active = True
-            st.session_state.timer_end_time = datetime.now() + timedelta(hours=duration)
+            st.session_state.timer_end_time = acq.timer_end_time
             st.rerun()
 
         if st.session_state.timer_active:
             if st.button("⏹️ Cancelar Temporizador", use_container_width=True):
+                acq = get_acquisition_engine(log_path=LOG_FILE)
+                acq.timer_active = False
+                acq.timer_end_time = None
+                
                 st.session_state.timer_active = False
                 st.session_state.timer_end_time = None
                 st.rerun()

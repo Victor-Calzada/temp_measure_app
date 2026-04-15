@@ -21,16 +21,19 @@ class DataAcquisition:
     def __init__(
         self,
         csv_path: Optional[str] = None,
+        log_path: Optional[str] = None,
         time_col: str = "Time",
         device_cols: list[str] | None = None,
     ):
         """
         Args:
             csv_path: Ruta a archivo CSV para modo simulación/lectura
+            log_path: Ruta opcional para guardar registros en tiempo real
             time_col: Nombre de la columna de tiempo
             device_cols: Nombres de columnas de dispositivos (por defecto: Dev 0-4)
         """
         self.csv_path = csv_path
+        self.log_path = log_path
         self.time_col = time_col
         self.device_cols = device_cols or [f"Dev {i}" for i in range(5)]
 
@@ -45,6 +48,17 @@ class DataAcquisition:
         self._df = pl.DataFrame(schema=self._schema)
         self._on_data_callback: Optional[Callable[[pl.DataFrame], None]] = None
 
+        # Atributos de temporizador para persistencia
+        self.timer_active = False
+        self.timer_end_time: Optional[datetime] = None
+
+        # Si hay log_path y existe, intentar cargar datos previos
+        if self.log_path and Path(self.log_path).exists():
+            try:
+                self._df = pl.read_csv(self.log_path, separator=";", schema=self._schema)
+            except Exception as e:
+                print(f"Error cargando log previo: {e}")
+
     def connect(self) -> bool:
         """Verifica que el entorno sea accesible (simplemente retorna True para sensores locales)."""
         return True
@@ -58,6 +72,28 @@ class DataAcquisition:
     def set_on_data_callback(self, callback: Callable[[pl.DataFrame], None]):
         """Define un callback que se ejecuta cuando llegan nuevos datos."""
         self._on_data_callback = callback
+
+    def _write_to_log(self, new_row: pl.DataFrame):
+        """Escribe una nueva fila al archivo de log (append)."""
+        if not self.log_path:
+            return
+
+        file_exists = Path(self.log_path).exists()
+        
+        # Usamos el modo append nativo si es posible o simplemente escribimos
+        # Para máxima seguridad en Raspberry Pi, abrimos y cerramos el archivo
+        try:
+            with open(self.log_path, "a") as f:
+                # Si el archivo es nuevo, escribir cabecera
+                if not file_exists:
+                    header = ";".join([self.time_col] + self.device_cols) + "\n"
+                    f.write(header)
+                
+                # Escribir fila
+                row_str = ";".join([str(new_row[col][0]) for col in [self.time_col] + self.device_cols]) + "\n"
+                f.write(row_str)
+        except Exception as e:
+            print(f"Error escribiendo en log: {e}")
 
     def _calculate_seconds_from_start(self, df: pl.DataFrame) -> pl.DataFrame:
         """Calcula segundos transcurridos manejando cruce de medianoche."""
@@ -134,7 +170,9 @@ class DataAcquisition:
 
     def _read_sensors_loop(self):
         """Bucle de lectura de sensores hardware (se ejecuta en thread separado)."""
-        self._df = pl.DataFrame(schema=self._schema)
+        # No reiniciamos el dataframe si ya tiene datos (ej. cargados de log)
+        if self._df.is_empty():
+            self._df = pl.DataFrame(schema=self._schema)
 
         while self._running:
             data = self._read_hardware_sensors()
@@ -142,6 +180,9 @@ class DataAcquisition:
             if data:
                 new_row = pl.DataFrame([data], schema=self._schema)
                 self._df = pl.concat([self._df, new_row])
+                
+                # Persistencia en tiempo real
+                self._write_to_log(new_row)
 
                 # Limitar a 25 millones de filas (~2GB) para no agotar memoria
                 if len(self._df) > 25_000_000:
