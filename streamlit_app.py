@@ -65,6 +65,10 @@ if "timer_duration_hrs" not in st.session_state:
 if "last_export_path" not in st.session_state:
     st.session_state.last_export_path = None
 
+if "sampling_interval" not in st.session_state:
+    from config import DEFAULT_SAMPLING_INTERVAL
+    st.session_state.sampling_interval = DEFAULT_SAMPLING_INTERVAL
+
 
 # ============================================================
 # Funciones auxiliares
@@ -207,7 +211,7 @@ with st.sidebar:
             help="Ruta absoluta o relativa al archivo de datos",
         )
 
-        if st.button("📂 Cargar Datos", type="primary", use_container_width=True):
+        if st.button("📂 Cargar Datos", type="primary", width="stretch"):
             try:
                 with st.spinner("Cargando datos..."):
                     acq = DataAcquisition(csv_path=csv_file)
@@ -221,7 +225,7 @@ with st.sidebar:
     else:
         # Configuración local
         if not st.session_state.connected:
-            if st.button("▶️ Iniciar Lectura", type="primary", use_container_width=True):
+            if st.button("▶️ Iniciar Lectura", type="primary", width="stretch"):
                 try:
                     # Siempre usamos el LOG_FILE para asegurar persistencia
                     acq = get_acquisition_engine(log_path=LOG_FILE)
@@ -241,7 +245,7 @@ with st.sidebar:
                 acq.connect()
                 acq.start_streaming()
 
-            if st.button("⏹️ Detener Lectura", use_container_width=True):
+            if st.button("⏹️ Detener Lectura", width="stretch"):
                 acq.disconnect()
                 st.session_state.connected = False
                 
@@ -311,45 +315,35 @@ with col_status:
             st.info("DETENIDO")
 
 # ============================================================
-# Adquisición de datos en tiempo real y Lógica del Temporizador
+# Adquisición de datos en tiempo real
 # ============================================================
 if mode == "📡 Sensores Internos (Tiempo Real)" and st.session_state.connected:
     # Recuperar el motor de adquisición persistente
     acq = get_acquisition_engine(log_path=LOG_FILE)
     
-    # Sincronizar estado del temporizador con session_state para la UI
+    # Sincronizar estado del temporizador y exportación con session_state
     st.session_state.timer_active = acq.timer_active
     st.session_state.timer_end_time = acq.timer_end_time
+    st.session_state.last_export_path = acq.last_export_path
+    
+    # Sincronizar estado de conexión (por si se detuvo solo)
+    st.session_state.connected = acq._running
     
     # Recuperar el dataframe acumulado
     current_data = acq.dataframe
-    if current_data is not None and not current_data.is_empty():
-        # Procesar tiempos para visualización
-        processed_data = acq._calculate_seconds_from_start(current_data)
-        st.session_state.df = processed_data.tail(max_points)
-
-    # Verificación del Temporizador
-    if acq.timer_active and acq.timer_end_time:
-        if datetime.now() >= acq.timer_end_time:
-            # Exportar datos completos antes de detener
-            full_df = acq.dataframe
-            if full_df is not None and not full_df.is_empty():
-                # Procesar tiempos para el export final
-                full_df_processed = acq._calculate_seconds_from_start(full_df)
-                st.session_state.last_export_path = handle_auto_export(full_df_processed)
-
-            # Detener lectura
-            acq.disconnect()
-            st.session_state.connected = False
-            acq.timer_active = False
-            st.session_state.timer_active = False
+    if current_data is not None:
+        if not current_data.is_empty():
+            # Procesar tiempos para visualización
+            processed_data = acq._calculate_seconds_from_start(current_data)
+            st.session_state.df = processed_data.tail(max_points)
+        else:
+            # Borrar datos de pantalla si el motor se ha limpiado
+            st.session_state.df = pl.DataFrame()
             
-            # Limpiar log activo ya que se ha exportado con éxito
-            if os.path.exists(LOG_FILE):
-                os.remove(LOG_FILE)
-            
-            st.cache_resource.clear()
-            st.rerun()
+    # Si se ha desconectado solo (por temporizador) y teníamos el log, ya se habrá borrado/movido en el motor
+    if not acq._running and st.session_state.connected:
+        st.session_state.connected = False
+        st.rerun()
 
 # ============================================================
 # Contenido principal con Pestañas
@@ -373,7 +367,7 @@ with tab_dash:
                 with cols[i]:
                     st.plotly_chart(
                         create_temperature_gauge(col_stats["actual"], col, colors[col]),
-                        use_container_width=True,
+                        width="stretch",
                     )
 
             # Subtítulo con rango de datos
@@ -387,7 +381,7 @@ with tab_dash:
         # ============================================================
         st.plotly_chart(
             create_temperature_chart(df),
-            use_container_width=True,
+            width="stretch",
         )
 
         # ============================================================
@@ -414,7 +408,7 @@ with tab_dash:
             if available_cols:
                 st.dataframe(
                     df.select(available_cols).tail(20),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
 
@@ -422,7 +416,7 @@ with tab_dash:
                 st.download_button(
                     "⬇️ Descargar CSV",
                     csv_data,
-                    file_name=f"temperaturas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    file_name="temperaturas_recientes.csv",
                     mime="text/csv",
                 )
     else:
@@ -443,57 +437,76 @@ with tab_dash:
         )
 
 with tab_timer:
-    st.header("⏱️ Temporizador de Medida")
-    st.info("Permite programar la detención automática de la lectura y el guardado de datos.")
+    # Layout: Gráfica a la izquierda, Opciones a la derecha
+    col_graph, col_opts = st.columns([2, 1])
 
-    col_input, col_status = st.columns([2, 3])
+    with col_graph:
+        if st.session_state.timer_active and len(st.session_state.df) > 0:
+            st.plotly_chart(
+                create_temperature_chart(st.session_state.df),
+                width="stretch",
+                key="timer_chart"
+            )
+        else:
+            st.info("📈 La gráfica aparecerá aquí cuando el temporizador esté activo y haya datos.")
+            st.image("https://via.placeholder.com/800x400.png?text=Gráfica+en+Tiempo+Real", use_container_width=True)
 
-    with col_input:
+    with col_opts:
+        st.subheader("⏱️ Configuración")
+        
         duration = st.number_input(
-            "Duración de la toma (horas)",
+            "Duración (horas)",
             min_value=0.01,
             max_value=100.0,
-            value=st.session_state.timer_duration_hrs,
+            value=st.session_state.get('timer_duration_hrs', 1.0),
             step=0.1
         )
         st.session_state.timer_duration_hrs = duration
 
-        start_btn_disabled = not st.session_state.connected
-        if st.button("🚀 Iniciar Temporizador", type="primary", use_container_width=True, disabled=start_btn_disabled):
-            # Obtener el motor de adquisición persistente
-            acq = get_acquisition_engine(log_path=LOG_FILE)
-            acq.timer_active = True
-            acq.timer_end_time = datetime.now() + timedelta(hours=duration)
-            
-            # Sincronizar session_state para actualización inmediata
-            st.session_state.timer_active = True
-            st.session_state.timer_end_time = acq.timer_end_time
-            st.rerun()
+        sampling_interval = st.number_input(
+            "Intervalo de muestreo (s)",
+            min_value=1.0,
+            max_value=300.0,
+            value=float(st.session_state.get('sampling_interval', 5.0)),
+            step=1.0,
+            help="Cada cuántos segundos se registra un punto (Min: 1s, Max: 300s)"
+        )
+        st.session_state.sampling_interval = sampling_interval
 
-        if st.session_state.timer_active:
-            if st.button("⏹️ Cancelar Temporizador", use_container_width=True):
-                acq = get_acquisition_engine(log_path=LOG_FILE)
+        st.divider()
+
+        acq = get_acquisition_engine(log_path=LOG_FILE)
+        
+        # Iniciar/Detener temporizador
+        if not st.session_state.timer_active:
+            start_btn_disabled = not st.session_state.connected
+            if st.button("🚀 Iniciar Temporizador", type="primary", width="stretch", disabled=start_btn_disabled):
+                acq.timer_active = True
+                acq.timer_end_time = datetime.now() + timedelta(hours=duration)
+                acq.sampling_interval = sampling_interval
+                
+                st.session_state.timer_active = True
+                st.session_state.timer_end_time = acq.timer_end_time
+                st.rerun()
+        else:
+            if st.button("⏹️ Cancelar Temporizador", width="stretch"):
                 acq.timer_active = False
                 acq.timer_end_time = None
-                
                 st.session_state.timer_active = False
                 st.session_state.timer_end_time = None
                 st.rerun()
 
-    with col_status:
+        # Estado del temporizador
         if st.session_state.timer_active and st.session_state.timer_end_time:
             remaining = st.session_state.timer_end_time - datetime.now()
             if remaining.total_seconds() > 0:
                 st.metric("Tiempo Restante", str(remaining - timedelta(0)).split('.')[0])
                 st.progress(max(0.0, min(1.0, 1.0 - (remaining.total_seconds() / (duration * 3600)))))
             else:
-                st.warning("⏳ Temporizador expirado. Procesando exportación...")
-        else:
-            st.write("El temporizador no está activo.")
+                st.warning("⏳ Expirado. Procesando...")
 
-    if st.session_state.last_export_path:
-        st.divider()
-        st.success(f"✅ Última exportación automática guardada en:\n`{st.session_state.last_export_path}`")
+        if acq.last_export_path:
+            st.success(f"✅ Exportado a:\n`{acq.last_export_path}`")
 
 
 # ============================================================

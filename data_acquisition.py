@@ -12,7 +12,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, Callable
 
-from config import W1_DEVICES_DIR, CPU_TEMP_FILE
+import os
+from config import W1_DEVICES_DIR, CPU_TEMP_FILE, USB_PATH, FALLBACK_PATH
 
 
 class DataAcquisition:
@@ -36,6 +37,8 @@ class DataAcquisition:
         self.log_path = log_path
         self.time_col = time_col
         self.device_cols = device_cols or [f"Dev {i}" for i in range(5)]
+        self.sampling_interval = 1.0  # Por defecto 1 segundo
+        self.last_export_path = None
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -169,6 +172,45 @@ class DataAcquisition:
                 
         return data
 
+    def _export_data(self) -> Optional[str]:
+        """Exporta los datos acumulados a CSV con el formato correcto."""
+        if self._df.is_empty():
+            return None
+            
+        target_dir = USB_PATH if os.path.exists(USB_PATH) else os.path.expanduser(FALLBACK_PATH)
+        os.makedirs(target_dir, exist_ok=True)
+
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"measurements_{timestamp}.csv"
+        full_path = os.path.join(target_dir, filename)
+
+        try:
+            # Procesar datos para incluir segundos desde el inicio
+            df_processed = self._calculate_seconds_from_start(self._df)
+            df_processed.write_csv(full_path, separator=";")
+            self.last_export_path = full_path
+            return full_path
+        except Exception as e:
+            print(f"Error en exportación automática: {e}")
+            return None
+
+    def _handle_timer_expiration(self):
+        """Maneja la expiración del temporizador de forma autónoma."""
+        self._export_data()
+        
+        # Limpiar log activo
+        if self.log_path and os.path.exists(self.log_path):
+            try:
+                os.remove(self.log_path)
+            except:
+                pass
+        
+        # Resetear estado y detener
+        self._df = pl.DataFrame(schema=self._schema)
+        self.timer_active = False
+        self.timer_end_time = None
+        self._running = False
+
     def _read_sensors_loop(self):
         """Bucle de lectura de sensores hardware (se ejecuta en thread separado)."""
         # No reiniciamos el dataframe si ya tiene datos (ej. cargados de log)
@@ -176,6 +218,12 @@ class DataAcquisition:
             self._df = pl.DataFrame(schema=self._schema)
 
         while self._running:
+            # Verificar temporizador
+            if self.timer_active and self.timer_end_time:
+                if datetime.now() >= self.timer_end_time:
+                    self._handle_timer_expiration()
+                    break
+
             data = self._read_hardware_sensors()
 
             if data:
@@ -192,8 +240,8 @@ class DataAcquisition:
                 if self._on_data_callback:
                     self._on_data_callback(self._df)
 
-            # Esperar 0.5 segundos aprox. antes de volver a leer
-            time.sleep(0.5)
+            # Esperar según el intervalo configurado
+            time.sleep(self.sampling_interval)
 
     def start_streaming(self):
         """Inicia streaming de datos en thread separado."""
