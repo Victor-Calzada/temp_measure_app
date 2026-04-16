@@ -118,6 +118,7 @@ class DataAcquisition:
                 .dt.total_seconds()
                 .alias("segundos_desde_inicio")
             )
+            .drop(["index", "tiempo_obj", "delta", "delta_corregido"], strict=False)
         )
 
     def _read_ds18b20(self, device_file: str) -> Optional[float]:
