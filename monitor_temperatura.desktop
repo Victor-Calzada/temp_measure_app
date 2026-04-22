@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Monitor Temperatura
+Comment=Ejecutar Dashboard con VENV
+Exec=bash -c "cd /home/victor/pruebas/temp_measure_app && source venv/bin/activate && streamlit run streamlit_app.py --server.address 0.0.0.0"
+Icon=sensors-applet
+Terminal=true
+Type=Application
+Categories=Development;

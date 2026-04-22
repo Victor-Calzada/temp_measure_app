@@ -17,17 +17,28 @@ pip install -r requirements.txt
 
 ## Ejecución
 
+### 1. Dashboard Principal (Recomendado)
 ```bash
 streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8501
 ```
+O utiliza el archivo `monitor_temperatura.desktop` para un acceso rápido desde el escritorio de la Raspberry Pi.
 
 Accede desde cualquier navegador en `http://<IP-de-tu-pi>:8501`
+
+### 2. Logger de Seguridad (Failsafe)
+En caso de querer registrar datos sin la interfaz gráfica o para mayor estabilidad en ensayos largos:
+```bash
+python3 failsafe_logger.py --interval 60 --duration 24
+```
+Este script guarda los datos en la carpeta `data/` con el prefijo `failsafe_datosdeldia_`.
 
 ## Estructura del Proyecto
 
 ```
 proyecto/
 ├── streamlit_app.py      # Dashboard principal
+├── failsafe_logger.py    # Logger de seguridad independiente
+├── monitor_temperatura.desktop # Acceso directo para el escritorio
 ├── data_acquisition.py   # Módulo de adquisición de datos
 ├── requirements.txt      # Dependencias
 ├── config.py            # Configuración
