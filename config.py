@@ -20,7 +20,7 @@ CPU_TEMP_FILE = "/sys/class/thermal/thermal_zone0/temp"
 # ============================================================
 REFRESH_RATE = 5  # Segundos entre actualizaciones de la UI
 DEFAULT_SAMPLING_INTERVAL = 1.0  # Segundos entre lecturas de sensores
-MAX_DATA_POINTS = 10000  # Máximo de puntos en memoria
+MAX_DATA_POINTS = 200000  # Máximo de puntos en memoria
 CHART_HEIGHT = 450  # Altura del gráfico principal en px
 
 # ============================================================

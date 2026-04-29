@@ -278,7 +278,7 @@ with st.sidebar:
     max_points = st.slider(
         "Máximo de puntos a mostrar",
         min_value=100,
-        max_value=5000,
+        max_value=100000,
         value=1000,
         step=100,
     )
@@ -457,7 +457,7 @@ with tab_timer:
         duration = st.number_input(
             "Duración (horas)",
             min_value=0.01,
-            max_value=100.0,
+            max_value=170.0,
             value=st.session_state.get('timer_duration_hrs', 1.0),
             step=0.1
         )
@@ -466,10 +466,10 @@ with tab_timer:
         sampling_interval = st.number_input(
             "Intervalo de muestreo (s)",
             min_value=1.0,
-            max_value=300.0,
+            max_value=600.0,
             value=float(st.session_state.get('sampling_interval', 5.0)),
             step=1.0,
-            help="Cada cuántos segundos se registra un punto (Min: 1s, Max: 300s)"
+            help="Cada cuántos segundos se registra un punto (Min: 1s, Max: 600s)"
         )
         st.session_state.sampling_interval = sampling_interval
 
