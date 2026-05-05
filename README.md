@@ -25,6 +25,12 @@ O utiliza el archivo `monitor_temperatura.desktop` para un acceso rápido desde 
 
 Accede desde cualquier navegador en `http://<IP-de-tu-pi>:8501`
 
+**Características de Robustez:**
+- **Triple Respaldo:** Al finalizar un temporizador, los datos se intentan guardar en USB, luego en Descargas y finalmente en la carpeta `data/` local.
+- **Persistencia Anti-Fallo:** El registro activo (`active_measurement.csv`) no se elimina hasta confirmar que la exportación final fue exitosa.
+- **Recuperación Automática:** Si la aplicación se cierra, detectará la sesión previa al reiniciar.
+- **Log de Errores:** Fallos en el hilo de sensores se registran en `error_acquisition.txt`.
+
 ### 2. Logger de Seguridad (Failsafe)
 En caso de querer registrar datos sin la interfaz gráfica o para mayor estabilidad en ensayos largos:
 ```bash
