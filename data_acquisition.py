@@ -173,75 +173,119 @@ class DataAcquisition:
         return data
 
     def _export_data(self) -> Optional[str]:
-        """Exporta los datos acumulados a CSV con el formato correcto."""
+        """
+        Exporta los datos acumulados a CSV con el formato correcto.
+        Intenta guardar en múltiples ubicaciones por seguridad.
+        """
         if self._df.is_empty():
             return None
             
-        target_dir = USB_PATH if os.path.exists(USB_PATH) else os.path.expanduser(FALLBACK_PATH)
-        os.makedirs(target_dir, exist_ok=True)
-
+        # Lista de rutas candidatas (en orden de preferencia)
+        candidate_dirs = [
+            USB_PATH,
+            os.path.expanduser(FALLBACK_PATH),
+            os.path.join(os.getcwd(), "data") # Último recurso: carpeta local del proyecto
+        ]
+        
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"measurements_{timestamp}.csv"
-        full_path = os.path.join(target_dir, filename)
+        
+        last_error = ""
 
+        for target_dir in candidate_dirs:
+            if not target_dir: continue
+            
+            try:
+                # Asegurar que el directorio existe
+                if not os.path.exists(target_dir):
+                    os.makedirs(target_dir, exist_ok=True)
+                
+                full_path = os.path.join(target_dir, filename)
+                
+                # Procesar datos para incluir segundos desde el inicio
+                df_processed = self._calculate_seconds_from_start(self._df)
+                df_processed.write_csv(full_path, separator=";")
+                
+                print(f"Exportación exitosa en: {full_path}")
+                self.last_export_path = full_path
+                return full_path
+            except Exception as e:
+                last_error = str(e)
+                print(f"Fallo al exportar en {target_dir}: {e}")
+                continue
+
+        # Si llegamos aquí, fallaron todos los intentos
+        self._log_error(f"Fallo total de exportación tras temporizador. Último error: {last_error}")
+        return None
+
+    def _log_error(self, message: str):
+        """Guarda errores en un archivo log persistente fuera de la consola."""
         try:
-            # Procesar datos para incluir segundos desde el inicio
-            df_processed = self._calculate_seconds_from_start(self._df)
-            df_processed.write_csv(full_path, separator=";")
-            self.last_export_path = full_path
-            return full_path
-        except Exception as e:
-            print(f"Error en exportación automática: {e}")
-            return None
+            with open("error_acquisition.txt", "a") as f:
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                f.write(f"[{timestamp}] {message}\n")
+        except:
+            pass
 
     def _handle_timer_expiration(self):
         """Maneja la expiración del temporizador de forma autónoma."""
-        self._export_data()
+        print("Temporizador expirado. Iniciando exportación de seguridad...")
+        export_path = self._export_data()
         
-        # Limpiar log activo
-        if self.log_path and os.path.exists(self.log_path):
-            try:
-                os.remove(self.log_path)
-            except:
-                pass
+        # SÓLO borramos el log si la exportación fue exitosa
+        if export_path:
+            if self.log_path and os.path.exists(self.log_path):
+                try:
+                    os.remove(self.log_path)
+                    print(f"Log activo {self.log_path} eliminado tras exportación exitosa.")
+                except Exception as e:
+                    self._log_error(f"Error borrando log tras exportación: {e}")
+            
+            # Resetear el DataFrame solo si los datos están a salvo
+            self._df = pl.DataFrame(schema=self._schema)
+        else:
+            self._log_error("El temporizador expiró pero la exportación falló en todas las rutas. NO se borró el log activo para permitir recuperación manual.")
         
         # Resetear estado y detener
-        self._df = pl.DataFrame(schema=self._schema)
         self.timer_active = False
         self.timer_end_time = None
         self._running = False
 
     def _read_sensors_loop(self):
         """Bucle de lectura de sensores hardware (se ejecuta en thread separado)."""
-        # No reiniciamos el dataframe si ya tiene datos (ej. cargados de log)
-        if self._df.is_empty():
-            self._df = pl.DataFrame(schema=self._schema)
+        try:
+            # No reiniciamos el dataframe si ya tiene datos (ej. cargados de log)
+            if self._df.is_empty():
+                self._df = pl.DataFrame(schema=self._schema)
 
-        while self._running:
-            # Verificar temporizador
-            if self.timer_active and self.timer_end_time:
-                if datetime.now() >= self.timer_end_time:
-                    self._handle_timer_expiration()
-                    break
+            while self._running:
+                # Verificar temporizador
+                if self.timer_active and self.timer_end_time:
+                    if datetime.now() >= self.timer_end_time:
+                        self._handle_timer_expiration()
+                        break
 
-            data = self._read_hardware_sensors()
+                data = self._read_hardware_sensors()
 
-            if data:
-                new_row = pl.DataFrame([data], schema=self._schema)
-                self._df = pl.concat([self._df, new_row])
-                
-                # Persistencia en tiempo real
-                self._write_to_log(new_row)
+                if data:
+                    new_row = pl.DataFrame([data], schema=self._schema)
+                    self._df = pl.concat([self._df, new_row])
+                    
+                    # Persistencia en tiempo real
+                    self._write_to_log(new_row)
 
-                # Limitar a 25 millones de filas (~2GB) para no agotar memoria
-                if len(self._df) > 25_000_000:
-                    self._df = self._df.tail(25_000_000)
+                    # Limitar a 25 millones de filas (~2GB) para no agotar memoria
+                    if len(self._df) > 25_000_000:
+                        self._df = self._df.tail(25_000_000)
 
-                if self._on_data_callback:
-                    self._on_data_callback(self._df)
+                    if self._on_data_callback:
+                        self._on_data_callback(self._df)
 
-            # Esperar según el intervalo configurado
-            time.sleep(self.sampling_interval)
+                # Esperar según el intervalo configurado
+                time.sleep(self.sampling_interval)
+        except Exception as e:
+            self._log_error(f"CRASH CRÍTICO en el hilo de lectura: {e}")
+            self._running = False
 
     def start_streaming(self):
         """Inicia streaming de datos en thread separado."""

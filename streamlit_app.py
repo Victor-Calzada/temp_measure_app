@@ -412,13 +412,21 @@ with tab_dash:
                     hide_index=True,
                 )
 
-                csv_data = df.select(available_cols).write_csv()
-                st.download_button(
-                    "⬇️ Descargar CSV",
-                    csv_data,
-                    file_name="temperaturas_recientes.csv",
-                    mime="text/csv",
-                )
+                with st.expander("📥 Exportar Datos"):
+                    st.info("La generación del archivo CSV puede tardar unos segundos si hay muchos datos.")
+                    
+                    @st.cache_data(ttl=60)  # Cachear el CSV por 1 minuto para evitar regeneración constante
+                    def convert_df_to_csv(df_to_convert, columns):
+                        return df_to_convert.select(columns).write_csv()
+
+                    if st.button("Preparar descarga de CSV"):
+                        csv_data = convert_df_to_csv(df, available_cols)
+                        st.download_button(
+                            "⬇️ Confirmar Descarga",
+                            csv_data,
+                            file_name=f"temperaturas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv",
+                        )
     else:
         # Estado vacío
         st.info("👈 Configure la conexión y cargue datos para comenzar")
