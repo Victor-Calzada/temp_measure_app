@@ -44,11 +44,26 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(DATA_DIR, f"failsafe_datosdeldia_{timestamp}.csv")
     
-    device_cols = [f"Dev {i}" for i in range(5)]
+    # Detectar sensores reales al inicio
+    w1_sensors = sorted(glob.glob(f"{W1_DEVICES_DIR}28-*/w1_slave"))
+    use_cpu = False
+    
+    if len(w1_sensors) > 0:
+        device_cols = [f"Dev {i}" for i in range(len(w1_sensors))]
+    else:
+        cpu_temp = get_cpu_temp()
+        if cpu_temp is not None:
+            device_cols = ["Dev 0"]
+            use_cpu = True
+        else:
+            print("Error: No se detectaron sensores físicos (1-Wire o CPU). Abortando.")
+            return
+
     header = ["Time"] + device_cols
 
     print(f"Iniciando registro en: {filename}")
     print(f"Muestreo: cada {args.interval}s | Duración: {args.duration}h")
+    print(f"Sensores detectados: {len(device_cols)} ({'CPU' if use_cpu else '1-Wire DS18B20'})")
     
     start_time = datetime.now()
     end_time = start_time + timedelta(hours=args.duration)
@@ -62,23 +77,15 @@ def main():
                 now = datetime.now()
                 now_str = now.strftime("%H:%M:%S")
                 
-                # Lógica de adquisición idéntica a streamlit_app
-                w1_sensors = sorted(glob.glob(f"{W1_DEVICES_DIR}28-*/w1_slave"))
                 row = [now_str]
                 
-                for i in range(5):
-                    temp = None
-                    if i < len(w1_sensors):
-                        temp = read_ds18b20(w1_sensors[i])
-                    elif i == 0 and len(w1_sensors) == 0:
-                        temp = get_cpu_temp()
-                    
-                    if temp is None:
-                        # Simulación si no hay hardware (mismo comportamiento que app original)
-                        base = 22.0 + (i * 0.5)
-                        temp = base + random.uniform(-0.5, 0.5)
-                    
-                    row.append(f"{temp:.3f}")
+                if use_cpu:
+                    temp = get_cpu_temp()
+                    row.append(f"{temp:.3f}" if temp is not None else "")
+                else:
+                    for sensor_file in w1_sensors:
+                        temp = read_ds18b20(sensor_file)
+                        row.append(f"{temp:.3f}" if temp is not None else "")
                 
                 writer.writerow(row)
                 f.flush() # Asegurar que se escribe en disco

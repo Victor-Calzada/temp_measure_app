@@ -229,11 +229,13 @@ with st.sidebar:
                 try:
                     # Siempre usamos el LOG_FILE para asegurar persistencia
                     acq = get_acquisition_engine(log_path=LOG_FILE)
-                    acq.connect()
-                    acq.start_streaming()
-                    st.session_state.connected = True
-                    st.session_state.start_time = datetime.now()
-                    st.rerun()
+                    if acq.connect():
+                        acq.start_streaming()
+                        st.session_state.connected = True
+                        st.session_state.start_time = datetime.now()
+                        st.rerun()
+                    else:
+                        st.error("❌ No se detectaron sensores físicos (1-Wire o CPU).")
                 except Exception as e:
                     st.error(f"Error: {e}")
         else:
@@ -360,15 +362,17 @@ with tab_dash:
         if show_stats:
             stats = create_stats_panel(df)
 
-            cols = st.columns(5)
-            colors = get_device_colors()
+            num_gauges = len(stats)
+            if num_gauges > 0:
+                cols = st.columns(num_gauges)
+                colors = get_device_colors()
 
-            for i, (col, col_stats) in enumerate(stats.items()):
-                with cols[i]:
-                    st.plotly_chart(
-                        create_temperature_gauge(col_stats["actual"], col, colors[col]),
-                        width="stretch",
-                    )
+                for i, (col, col_stats) in enumerate(stats.items()):
+                    with cols[i]:
+                        st.plotly_chart(
+                            create_temperature_gauge(col_stats["actual"], col, colors.get(col, "#888888")),
+                            width="stretch",
+                        )
 
             # Subtítulo con rango de datos
             if "segundos_desde_inicio" in df.columns:

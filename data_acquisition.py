@@ -43,6 +43,16 @@ class DataAcquisition:
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
+        # Si hay log_path y existe, intentar determinar las columnas guardadas
+        if self.log_path and Path(self.log_path).exists():
+            try:
+                temp_df = pl.read_csv(self.log_path, separator=";", n_rows=0)
+                saved_cols = [col for col in temp_df.columns if col != self.time_col]
+                if saved_cols:
+                    self.device_cols = saved_cols
+            except Exception as e:
+                print(f"Error leyendo cabecera del log previo: {e}")
+
         # Definir el esquema explícito para evitar errores de tipo con Polars (Null vs String/Float)
         self._schema = {self.time_col: pl.String}
         for col in self.device_cols:
@@ -55,7 +65,7 @@ class DataAcquisition:
         self.timer_active = False
         self.timer_end_time: Optional[datetime] = None
 
-        # Si hay log_path y existe, intentar cargar datos previos
+        # Si hay log_path y existe, cargar los datos previos
         if self.log_path and Path(self.log_path).exists():
             try:
                 self._df = pl.read_csv(self.log_path, separator=";", schema=self._schema)
@@ -63,8 +73,30 @@ class DataAcquisition:
                 print(f"Error cargando log previo: {e}")
 
     def connect(self) -> bool:
-        """Verifica que el entorno sea accesible (simplemente retorna True para sensores locales)."""
-        return True
+        """Verifica los sensores físicos disponibles y ajusta dinámicamente las columnas del esquema."""
+        self.w1_sensors = sorted(glob.glob(f"{W1_DEVICES_DIR}28-*/w1_slave"))
+        
+        if len(self.w1_sensors) > 0:
+            self.device_cols = [f"Dev {i}" for i in range(len(self.w1_sensors))]
+            self.use_cpu = False
+        else:
+            cpu_temp = self._read_cpu_temp()
+            if cpu_temp is not None:
+                self.device_cols = ["Dev 0"]
+                self.use_cpu = True
+            else:
+                self.device_cols = []
+                self.use_cpu = False
+
+        # Re-construir el esquema dinámicamente
+        self._schema = {self.time_col: pl.String}
+        for col in self.device_cols:
+            self._schema[col] = pl.Float64
+
+        if self._df.is_empty():
+            self._df = pl.DataFrame(schema=self._schema)
+
+        return len(self.device_cols) > 0
 
     def disconnect(self):
         """Detiene la lectura de los sensores."""
@@ -146,30 +178,26 @@ class DataAcquisition:
             return None
 
     def _read_hardware_sensors(self) -> dict:
-        """Lee sensores físicos (1-Wire o CPU) para poblar device_cols."""
+        """Lee únicamente los sensores físicos detectados (sin simulación estocástica)."""
         now_str = datetime.now().strftime("%H:%M:%S")
         data = {self.time_col: now_str}
         
-        # Buscar todos los sensores 1-Wire (generalmente empizan con 28-)
-        w1_sensors = sorted(glob.glob(f"{W1_DEVICES_DIR}28-*/w1_slave"))
-        
-        for i, col in enumerate(self.device_cols):
-            temp = None
-            if i < len(w1_sensors):
-                # Usar el sensor DS18B20 correspondiente
-                temp = self._read_ds18b20(w1_sensors[i])
-            elif i == 0 and len(w1_sensors) == 0:
-                # Si no hay sensores 1-Wire, usar la temperatura de la CPU como fallback para Dev 0
-                temp = self._read_cpu_temp()
-                
-            if temp is not None:
-                data[col] = temp
+        if getattr(self, "use_cpu", False):
+            data["Dev 0"] = self._read_cpu_temp()
+        elif getattr(self, "w1_sensors", None):
+            for i, sensor_path in enumerate(self.w1_sensors):
+                data[f"Dev {i}"] = self._read_ds18b20(sensor_path)
+        else:
+            # Fallback dinámico si por alguna razón no se llamó a connect() previamente
+            w1 = sorted(glob.glob(f"{W1_DEVICES_DIR}28-*/w1_slave"))
+            if w1:
+                for i, path in enumerate(w1):
+                    data[f"Dev {i}"] = self._read_ds18b20(path)
             else:
-                # Fallback estocástico/simulado si faltan sensores físicos
-                # Esto mantiene el dashboard activo para sensores adicionales
-                base = 22.0 + (i * 0.5)
-                data[col] = base + random.uniform(-0.5, 0.5)
-                
+                cpu = self._read_cpu_temp()
+                if cpu is not None:
+                    data["Dev 0"] = cpu
+                    
         return data
 
     def _export_data(self) -> Optional[str]:
