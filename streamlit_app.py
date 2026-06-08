@@ -469,7 +469,7 @@ with tab_timer:
         duration = st.number_input(
             "Duración (horas)",
             min_value=0.01,
-            max_value=170.0,
+            max_value=504.0,
             value=st.session_state.get('timer_duration_hrs', 1.0),
             step=0.1
         )
