@@ -22,7 +22,7 @@ st.set_page_config(
     page_title="Monitor de Temperatura",
     page_icon="🌡️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ============================================================
@@ -103,19 +103,29 @@ def create_temperature_chart(df: pl.DataFrame, time_col: str = "segundos_desde_i
         ))
 
     fig.update_layout(
-        title="Temperaturas en Tiempo Real",
-        xaxis_title="Tiempo (segundos desde inicio)" if time_col in df.columns else "Tiempo",
-        yaxis_title="Temperatura (°C)",
-        height=450,
+        height=280,
         hovermode="x unified",
+        xaxis=dict(
+            title=dict(text="Tiempo (s)" if time_col in df.columns else "Tiempo", font=dict(size=10)),
+            tickfont=dict(size=9),
+            gridcolor="#E2E8F0"
+        ),
+        yaxis=dict(
+            title=dict(text="Temp (°C)", font=dict(size=10)),
+            tickfont=dict(size=9),
+            gridcolor="#E2E8F0"
+        ),
         legend=dict(
             orientation="h",
             yanchor="bottom",
             y=1.02,
             xanchor="right",
             x=1,
+            font=dict(size=9),
         ),
-        margin=dict(l=40, r=40, t=60, b=40),
+        margin=dict(l=30, r=10, t=25, b=25),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
     )
 
     return fig
@@ -130,7 +140,7 @@ def create_temperature_gauge(temp: float, name: str, color: str) -> go.Figure:
         value=temp,
         domain={"x": [0, 1], "y": [0, 1]},
         gauge={
-            "axis": {"range": [15, 35], "tickwidth": 1},
+            "axis": {"range": [15, 35], "tickwidth": 1, "tickfont": {"size": 8}},
             "bar": {"color": color},
             "borderwidth": 0,
             "bordercolor": "#333",
@@ -141,13 +151,15 @@ def create_temperature_gauge(temp: float, name: str, color: str) -> go.Figure:
                 {"range": [30, 35], "color": "#e17055"},
             ],
         },
-        number={"suffix": " °C", "font": {"size": 20}},
-        title={"text": name, "font": {"size": 14}},
+        number={"suffix": " °C", "font": {"size": 13}, "valueformat": ".1f"},
+        title={"text": name, "font": {"size": 10}, "position": "top center"},
     ))
 
     fig.update_layout(
-        height=150,
-        margin=dict(l=20, r=20, t=30, b=20),
+        height=95,
+        margin=dict(l=5, r=5, t=10, b=5),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
     )
 
     return fig
@@ -189,140 +201,14 @@ def handle_auto_export(df: pl.DataFrame):
 
 
 # ============================================================
-# Sidebar - Configuración
-# ============================================================
-with st.sidebar:
-    st.header("⚙️ Configuración")
-
-    # Selección de modo
-    mode = st.radio(
-        "Modo de operación",
-        ["📁 Simulación (CSV)", "📡 Sensores Internos (Tiempo Real)"],
-        captions=[
-            "Carga datos desde archivo CSV",
-            "Lee hardware local en Raspberry Pi",
-        ],
-    )
-
-    if mode == "📁 Simulación (CSV)":
-        csv_file = st.text_input(
-            "Ruta al archivo CSV",
-            value="data/Medida_nueva.txt",
-            help="Ruta absoluta o relativa al archivo de datos",
-        )
-
-        if st.button("📂 Cargar Datos", type="primary", width="stretch"):
-            try:
-                with st.spinner("Cargando datos..."):
-                    acq = DataAcquisition(csv_path=csv_file)
-                    df = acq.read_csv_file(csv_file)
-                    st.session_state.df = df
-                    st.session_state.start_time = datetime.now()
-                    st.success(f"✅ Cargados {len(df)} registros")
-            except Exception as e:
-                st.error(f"❌ Error: {e}")
-
-    else:
-        # Configuración local
-        if not st.session_state.connected:
-            if st.button("▶️ Iniciar Lectura", type="primary", width="stretch"):
-                try:
-                    # Siempre usamos el LOG_FILE para asegurar persistencia
-                    acq = get_acquisition_engine(log_path=LOG_FILE)
-                    if acq.connect():
-                        acq.start_streaming()
-                        st.session_state.connected = True
-                        st.session_state.start_time = datetime.now()
-                        st.rerun()
-                    else:
-                        st.error("❌ No se detectaron sensores físicos (1-Wire o CPU).")
-                except Exception as e:
-                    st.error(f"Error: {e}")
-        else:
-            st.success("🟢 Leyendo Sensores")
-            
-            # Recuperar el motor si ya estaba conectado
-            acq = get_acquisition_engine(log_path=LOG_FILE)
-            if not acq._running:
-                acq.connect()
-                acq.start_streaming()
-
-            if st.button("⏹️ Detener Lectura", width="stretch"):
-                acq.disconnect()
-                st.session_state.connected = False
-                
-                # Al detener manualmente, si el archivo de log existe, lo movemos a histórico o lo borramos
-                if os.path.exists(LOG_FILE):
-                    try:
-                        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                        final_path = os.path.join(DATA_DIR, f"manual_stop_{timestamp}.csv")
-                        os.rename(LOG_FILE, final_path)
-                        st.info(f"💾 Datos guardados en {final_path}")
-                    except:
-                        os.remove(LOG_FILE)
-                
-                # Forzar recreación del motor la próxima vez
-                st.cache_resource.clear()
-                st.rerun()
-
-    st.divider()
-
-    # Configuración de visualización
-    st.subheader("📊 Visualización")
-
-    refresh_rate = st.slider(
-        "Intervalo de actualización (s)",
-        min_value=1,
-        max_value=60,
-        value=5,
-    )
-
-    max_points = st.slider(
-        "Máximo de puntos a mostrar",
-        min_value=100,
-        max_value=100000,
-        value=1000,
-        step=100,
-    )
-
-    show_stats = st.checkbox("Mostrar estadísticas", value=True)
-
-    st.divider()
-
-    # Información del sistema
-    st.subheader("ℹ️ Sistema")
-    st.caption(f"Inicio: {st.session_state.start_time.strftime('%H:%M:%S') if st.session_state.start_time else 'N/A'}")
-
-    if st.session_state.connected:
-        elapsed = (datetime.now() - st.session_state.start_time).total_seconds() if st.session_state.start_time else 0
-        st.caption(f"Tiempo de conexión: {elapsed:.0f}s")
-
-        if len(st.session_state.df) > 0:
-            st.caption(f"Total lecturas: {len(st.session_state.df)}")
-
-
-# ============================================================
-# Título principal
-# ============================================================
-col_title, col_status = st.columns([4, 1])
-
-with col_title:
-    st.title("🌡️ Monitor de Temperatura en Tiempo Real")
-
-with col_status:
-    if mode == "📡 Sensores Internos (Tiempo Real)":
-        if st.session_state.connected:
-            st.success("LEYENDO")
-        else:
-            st.info("DETENIDO")
-
-# ============================================================
 # Adquisición de datos en tiempo real
 # ============================================================
-if mode == "📡 Sensores Internos (Tiempo Real)" and st.session_state.connected:
-    # Recuperar el motor de adquisición persistente
-    acq = get_acquisition_engine(log_path=LOG_FILE)
-    
+# Recuperar el motor de adquisición persistente
+acq = get_acquisition_engine(log_path=LOG_FILE)
+# Fijado a 5 segundos según el requerimiento
+acq.sampling_interval = 5.0
+
+if st.session_state.connected:
     # Sincronizar estado del temporizador y exportación con session_state
     st.session_state.timer_active = acq.timer_active
     st.session_state.timer_end_time = acq.timer_end_time
@@ -337,15 +223,83 @@ if mode == "📡 Sensores Internos (Tiempo Real)" and st.session_state.connected
         if not current_data.is_empty():
             # Procesar tiempos para visualización
             processed_data = acq._calculate_seconds_from_start(current_data)
-            st.session_state.df = processed_data.tail(max_points)
+            # Fijado a 1000 puntos
+            st.session_state.df = processed_data.tail(1000)
         else:
-            # Borrar datos de pantalla si el motor se ha limpiado
             st.session_state.df = pl.DataFrame()
             
     # Si se ha desconectado solo (por temporizador) y teníamos el log, ya se habrá borrado/movido en el motor
-    if not acq._running and st.session_state.connected:
+    if not acq._running:
         st.session_state.connected = False
         st.rerun()
+
+# ============================================================
+# Cabecera de control (Reemplaza la barra lateral y título original)
+# ============================================================
+col_header, col_btn = st.columns([3, 1])
+
+with col_header:
+    st.markdown("<h3 style='margin: 0; padding: 0;'>🌡️ Monitor de Temperatura</h3>", unsafe_allow_html=True)
+    
+    # Mostrar estado de conexión y detalles en una sola línea compacta
+    if st.session_state.connected:
+        elapsed = (datetime.now() - st.session_state.start_time).total_seconds() if st.session_state.start_time else 0
+        total_pts = len(st.session_state.df)
+        st.markdown(
+            f"<div style='font-size: 13px; margin-top: 2px;'>"
+            f"<span style='color:#4ECDC4; font-weight:bold;'>🟢 LEYENDO</span> | "
+            f"Tiempo activo: <b>{elapsed:.0f}s</b> | "
+            f"Puntos: <b>{total_pts}/1000</b>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+    else:
+        st.markdown(
+            "<div style='font-size: 13px; margin-top: 2px;'>"
+            "<span style='color:#FF6B6B; font-weight:bold;'>🔴 DETENIDO</span> | "
+            "Listo para iniciar"
+            "</div>",
+            unsafe_allow_html=True
+        )
+
+with col_btn:
+    # Botón para Iniciar/Detener lectura
+    if not st.session_state.connected:
+        if st.button("▶️ Iniciar Lectura", type="primary", use_container_width=True):
+            try:
+                if acq.connect():
+                    acq.sampling_interval = 5.0
+                    acq.start_streaming()
+                    st.session_state.connected = True
+                    st.session_state.start_time = datetime.now()
+                    st.rerun()
+                else:
+                    st.error("❌ No se detectaron sensores físicos (1-Wire o CPU).")
+            except Exception as e:
+                st.error(f"Error: {e}")
+    else:
+        if st.button("⏹️ Detener Lectura", type="secondary", use_container_width=True):
+            acq.disconnect()
+            st.session_state.connected = False
+            
+            # Al detener manualmente, si el archivo de log existe, lo movemos a histórico o lo borramos
+            if os.path.exists(LOG_FILE):
+                try:
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    final_path = os.path.join(DATA_DIR, f"manual_stop_{timestamp}.csv")
+                    os.rename(LOG_FILE, final_path)
+                    st.info(f"💾 Datos guardados en {final_path}")
+                except:
+                    try:
+                        os.remove(LOG_FILE)
+                    except:
+                        pass
+            
+            # Forzar recreación del motor la próxima vez
+            st.cache_resource.clear()
+            st.rerun()
+
+st.markdown("<hr style='margin: 10px 0 15px 0;'>", unsafe_allow_html=True)
 
 # ============================================================
 # Contenido principal con Pestañas
@@ -357,114 +311,88 @@ with tab_dash:
         df = st.session_state.df
 
         # ============================================================
-        # Métricas y Gauges
+        # Métricas y Gauges (Temperatura actual)
         # ============================================================
-        if show_stats:
-            stats = create_stats_panel(df)
+        stats = create_stats_panel(df)
+        num_gauges = len(stats)
+        if num_gauges > 0:
+            cols = st.columns(num_gauges)
+            colors = get_device_colors()
 
-            num_gauges = len(stats)
-            if num_gauges > 0:
-                cols = st.columns(num_gauges)
-                colors = get_device_colors()
-
-                for i, (col, col_stats) in enumerate(stats.items()):
-                    with cols[i]:
-                        st.plotly_chart(
-                            create_temperature_gauge(col_stats["actual"], col, colors.get(col, "#888888")),
-                            width="stretch",
-                        )
-
-            # Subtítulo con rango de datos
-            if "segundos_desde_inicio" in df.columns:
-                t_min = df["segundos_desde_inicio"].min()
-                t_max = df["segundos_desde_inicio"].max()
-                st.caption(f"⏱️ Rango temporal: {t_min:.0f}s - {t_max:.0f}s ({t_max - t_min:.0f}s de duración)")
+            for i, (col, col_stats) in enumerate(stats.items()):
+                with cols[i]:
+                    st.plotly_chart(
+                        create_temperature_gauge(col_stats["actual"], col, colors.get(col, "#888888")),
+                        use_container_width=True,
+                    )
 
         # ============================================================
         # Gráfico principal
         # ============================================================
         st.plotly_chart(
             create_temperature_chart(df),
-            width="stretch",
+            use_container_width=True,
         )
 
         # ============================================================
-        # Estadísticas detalladas
+        # Estadísticas detalladas y Exportar (Compactado)
         # ============================================================
-        with st.expander("📈 Estadísticas Detalladas"):
-            if show_stats:
-                stats = create_stats_panel(df)
-
+        col_detail, col_export = st.columns([2, 1])
+        
+        with col_detail:
+            with st.expander("📈 Estadísticas Detalladas", expanded=False):
                 stat_cols = st.columns(len(stats))
                 for i, (col, col_stats) in enumerate(stats.items()):
                     with stat_cols[i]:
-                        st.metric(col, f"{col_stats['actual']:.2f} °C")
-                        st.caption(f"Mín: {col_stats['min']:.2f} | Máx: {col_stats['max']:.2f}")
-                        st.caption(f"Media: {col_stats['mean']:.2f} | σ: {col_stats['std']:.2f}")
+                        st.metric(col, f"{col_stats['actual']:.1f} °C")
+                        st.caption(f"Min: {col_stats['min']:.1f} | Max: {col_stats['max']:.1f}")
 
-        # ============================================================
-        # Tabla de datos recientes
-        # ============================================================
-        with st.expander("📋 Datos Recientes"):
-            display_cols = ["Time"] + [c for c in df.columns if c.startswith("Dev")]
-            available_cols = [c for c in display_cols if c in df.columns]
-
-            if available_cols:
-                st.dataframe(
-                    df.select(available_cols).tail(20),
-                    width="stretch",
-                    hide_index=True,
-                )
-
-                with st.expander("📥 Exportar Datos"):
-                    st.info("La generación del archivo CSV puede tardar unos segundos si hay muchos datos.")
-                    
-                    @st.cache_data(ttl=60)  # Cachear el CSV por 1 minuto para evitar regeneración constante
+        with col_export:
+            with st.expander("📥 Descargar CSV", expanded=False):
+                display_cols = ["Time"] + [c for c in df.columns if c.startswith("Dev")]
+                available_cols = [c for c in display_cols if c in df.columns]
+                
+                if available_cols:
+                    @st.cache_data(ttl=30)
                     def convert_df_to_csv(df_to_convert, columns):
                         return df_to_convert.select(columns).write_csv()
-
-                    if st.button("Preparar descarga de CSV"):
-                        csv_data = convert_df_to_csv(df, available_cols)
-                        st.download_button(
-                            "⬇️ Confirmar Descarga",
-                            csv_data,
-                            file_name=f"temperaturas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                            mime="text/csv",
-                        )
+                    
+                    csv_data = convert_df_to_csv(df, available_cols)
+                    st.download_button(
+                        "⬇️ Descargar Datos",
+                        csv_data,
+                        file_name=f"temperaturas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
     else:
         # Estado vacío
-        st.info("👈 Configure la conexión y cargue datos para comenzar")
+        st.info("ℹ️ Presione el botón 'Iniciar Lectura' arriba para comenzar a medir desde los sensores físicos.")
         st.markdown(
             """
             ### Instrucciones:
-            1. **Modo Simulación**: Ingrese la ruta a un archivo CSV con formato `Time;Dev 0;Dev 1;...`
-            2. **Modo Sensores Internos**: Lea directamente el hardware local 1-Wire.
-
-            El formato esperado del archivo CSV es:
-            ```
-            Time;Dev 0;Dev 1;Dev 2;Dev 3;Dev 4
-            16:59:25;22.062;22.375;23.312;22.187;22.125
-            ```
+            1. Conecte los sensores de temperatura 1-Wire (DS18B20) a los pines correspondientes de la Raspberry Pi.
+            2. Presione el botón **Iniciar Lectura** en la esquina superior derecha.
+            3. Los datos comenzarán a mostrarse en tiempo real cada 5 segundos.
+            4. El sistema mantiene los últimos 1000 puntos en pantalla.
             """
         )
 
 with tab_timer:
-    # Layout: Gráfica a la izquierda, Opciones a la derecha
     col_graph, col_opts = st.columns([2, 1])
 
     with col_graph:
         if st.session_state.timer_active and len(st.session_state.df) > 0:
             st.plotly_chart(
                 create_temperature_chart(st.session_state.df),
-                width="stretch",
+                use_container_width=True,
                 key="timer_chart"
             )
         else:
-            st.info("📈 La gráfica aparecerá aquí cuando el temporizador esté activo y haya datos.")
-            st.image("https://via.placeholder.com/800x400.png?text=Gráfica+en+Tiempo+Real", use_container_width=True)
+            st.info("📈 La gráfica de evolución temporal se mostrará aquí una vez que el temporizador comience a registrar datos.")
 
     with col_opts:
-        st.subheader("⏱️ Configuración")
+        st.markdown("#### ⏱️ Configuración")
         
         duration = st.number_input(
             "Duración (horas)",
@@ -475,33 +403,25 @@ with tab_timer:
         )
         st.session_state.timer_duration_hrs = duration
 
-        sampling_interval = st.number_input(
-            "Intervalo de muestreo (s)",
-            min_value=1.0,
-            max_value=600.0,
-            value=float(st.session_state.get('sampling_interval', 5.0)),
-            step=1.0,
-            help="Cada cuántos segundos se registra un punto (Min: 1s, Max: 600s)"
-        )
-        st.session_state.sampling_interval = sampling_interval
+        # Intervalo de muestreo fijo a 5s
+        st.session_state.sampling_interval = 5.0
+        st.caption("⏱️ Intervalo de muestreo fijado a 5 segundos.")
 
         st.divider()
-
-        acq = get_acquisition_engine(log_path=LOG_FILE)
         
         # Iniciar/Detener temporizador
         if not st.session_state.timer_active:
             start_btn_disabled = not st.session_state.connected
-            if st.button("🚀 Iniciar Temporizador", type="primary", width="stretch", disabled=start_btn_disabled):
+            if st.button("🚀 Iniciar Temporizador", type="primary", use_container_width=True, disabled=start_btn_disabled):
                 acq.timer_active = True
                 acq.timer_end_time = datetime.now() + timedelta(hours=duration)
-                acq.sampling_interval = sampling_interval
+                acq.sampling_interval = 5.0
                 
                 st.session_state.timer_active = True
                 st.session_state.timer_end_time = acq.timer_end_time
                 st.rerun()
         else:
-            if st.button("⏹️ Cancelar Temporizador", width="stretch"):
+            if st.button("⏹️ Cancelar Temporizador", use_container_width=True):
                 acq.timer_active = False
                 acq.timer_end_time = None
                 st.session_state.timer_active = False
@@ -524,6 +444,6 @@ with tab_timer:
 # ============================================================
 # Auto-actualización
 # ============================================================
-if mode == "📡 Sensores Internos (Tiempo Real)" and st.session_state.connected:
-    time.sleep(refresh_rate)
+if st.session_state.connected:
+    time.sleep(5)
     st.rerun()

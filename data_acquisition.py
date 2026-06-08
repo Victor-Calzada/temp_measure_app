@@ -37,7 +37,7 @@ class DataAcquisition:
         self.log_path = log_path
         self.time_col = time_col
         self.device_cols = device_cols or [f"Dev {i}" for i in range(5)]
-        self.sampling_interval = 1.0  # Por defecto 1 segundo
+        self.sampling_interval = 5.0  # Por defecto 5 segundos
         self.last_export_path = None
 
         self._running = False
